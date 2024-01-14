@@ -1,0 +1,193 @@
+﻿create or replace package user_management_pkg is
+    -- Kullanycy tanymlama proc
+    procedure create_user(
+        p_user_id NUMBER,
+        p_username VARCHAR2,
+        p_email varchar2,
+        p_gender varchar2,
+        p_password VARCHAR2,
+        p_name VARCHAR2,
+        p_surname VARCHAR2,
+        p_address_id number,
+        p_phone_number varchar2,
+        p_street varchar2,
+        p_city varchar2,
+        p_state varchar2,
+        p_postal_code varchar2,
+        p_country_id number
+    );
+
+    -- Kullanycy giri?i kontrolü proc
+    PROCEDURE user_login(
+        p_username IN VARCHAR2,
+        p_password IN VARCHAR2
+    );
+
+    -- Hashing fonksiyonu
+    function hash_password(p_password varchar2) return varchar2;
+    
+    PROCEDURE change_password_via_email(
+        p_email IN varchar2,
+        p_new_password IN VARCHAR2
+    );
+
+end user_management_pkg;
+/
+create or replace package body user_management_pkg is
+
+
+
+
+function hash_password(p_password varchar2) return varchar2 is
+  hashed_password varchar2(64); 
+ begin
+  select STANDARD_HASH(p_password,'SHA256') INTO hashed_password from dual;
+  return hashed_password;
+end hash_password;
+
+
+    --Kullanycy yaratma proc
+  PROCEDURE create_user(
+    p_user_id      NUMBER,
+    p_username     VARCHAR2,
+    p_email        VARCHAR2,
+    p_gender       VARCHAR2,
+    p_password     VARCHAR2,
+    p_name         VARCHAR2,
+    p_surname      VARCHAR2,
+    p_address_id   NUMBER,
+    p_phone_number VARCHAR2,
+    p_street varchar2,
+    p_city varchar2,
+    p_state varchar2,
+    p_postal_code varchar2,
+    p_country_id number
+) IS
+    v_password_hash VARCHAR2(64); -- SHA-256 hash boyutu
+BEGIN
+    v_password_hash := hash_password(p_password);
+   
+
+    -- Kullanýcýyý ekle
+    INSERT INTO user_definition(user_id, username, password_hash, last_login_date)
+    VALUES (p_user_id, p_username, v_password_hash, NULL);
+    
+    
+
+    --User adresse ekle
+    
+    INSERT INTO user_address(address_id,
+                             user_id,
+                             street,
+                             city,
+                             state,
+                             postal_code,
+                             country_id)
+    values(p_address_id,p_user_id,p_street,p_city,p_state,p_postal_code,p_country_id);
+
+
+
+
+    -- Kullanýcý detaylarýný ekle
+    INSERT INTO user_details(user_details_id, name_, surname, gender, address_id, email, phone_number)
+    VALUES (p_user_id, p_name, p_surname, p_gender, p_address_id, p_email, p_phone_number);
+    
+    
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Kullanici eklenirken bir hata olustu: ' || SQLERRM || ' (satir ' || TO_CHAR(SQLCODE) || ')');
+END create_user;
+
+ PROCEDURE change_password_via_email(
+        p_email IN varchar2,
+        p_new_password IN VARCHAR2) is
+        
+    v_email varchar2(100);
+
+    v_userid number;
+  begin
+    
+    select email into v_email from user_details where email = p_email;
+    
+    if p_email = v_email
+      then
+        select user_details_id into v_userid from user_details where email = v_email;
+        update user_definition set password_hash = hash_password(p_new_password)  where user_id = v_userid;
+        update user_definition set is_locked = 0 where user_id = v_userid;
+        update user_definition set login_attempts = 0 where user_id = v_userid;
+        dbms_output.put_line('Email dogrulandi');
+        dbms_output.put_line('Sifre degistirildi. Yeni sifreniz: '|| p_new_password);
+      
+      
+     else
+       dbms_output.put_line('Email bulunamadi. Lutfen dogru email girdiginizden emin olunuz.');
+   
+       end if;
+     end;
+
+
+    -- Kullanici girisi kontrolü proc
+    PROCEDURE user_login(
+        p_username IN VARCHAR2,
+        p_password IN VARCHAR2
+    ) AS
+        v_user_id user_definition.user_id%TYPE;
+        v_attempts user_definition.login_attempts%TYPE;
+        v_locked user_definition.is_locked%TYPE;
+        v_stored_password_hash user_definition.password_hash%TYPE;
+    BEGIN
+        -- Kullaniciyi kontrol et
+        SELECT user_id, login_attempts,is_locked
+        INTO v_user_id, v_attempts, v_locked
+        FROM user_definition
+        WHERE username = p_username;
+        
+        
+
+        -- Eger hesap kilitli ise
+        IF v_locked = 1 THEN
+            DBMS_OUTPUT.PUT_LINE('Hesap kilitli, acmak icin lutfen mail adresinizi dogrulayiniz.');
+        ELSE
+            -- sifre kontrolu
+            SELECT password_hash
+            INTO v_stored_password_hash
+            FROM user_definition
+            WHERE username = p_username;
+            
+            
+            IF  hash_password(p_password) = v_stored_password_hash THEN
+                -- Basarili giris
+                DBMS_OUTPUT.PUT_LINE('Basarili Giris');
+                -- Giris denemesini sifirla
+                UPDATE user_definition SET login_attempts = 0, last_login_date = SYSDATE WHERE user_id = v_user_id;
+                COMMIT;
+            ELSE
+                -- Hatali giris
+                DBMS_OUTPUT.PUT_LINE('Hatali giris');
+                -- Giris denemesini arttir
+                UPDATE user_definition SET login_attempts = v_attempts + 1 WHERE user_id = v_user_id;
+                COMMIT;
+
+                -- Eger 3 hatali giris olursa hesabi kilitle
+                IF v_attempts + 1 >= 3 THEN
+                    UPDATE user_definition SET is_locked = 1 WHERE user_id = v_user_id;
+                    COMMIT;
+                    DBMS_OUTPUT.PUT_LINE('Hesap 3 kez hatali giris nedeniyle kilitlendi. Acmak icin lutfen 
+                    mail adresinizi dogrulayin.');
+                END IF;
+            END IF;
+        END IF;
+        
+        exception 
+          when no_data_found then
+            dbms_output.put_line('Böyle bir kullanici bulunamadi.');
+    END user_login;
+
+
+
+
+
+
+
+end user_management_pkg;
+/
